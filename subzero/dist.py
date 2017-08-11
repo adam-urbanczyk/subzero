@@ -8,12 +8,13 @@ import pkg_resources
 import shutil
 import subprocess
 import sys
-from subprocess import CalledProcessError
-
 import PyInstaller.__main__
+import logging
+
+from subprocess import CalledProcessError
+from pip.commands.show import search_packages_info
 from PyInstaller.building.makespec import main as makespec_main
 from PyInstaller.utils.hooks import collect_submodules, get_module_file_attribute
-import logging
 from packaging import version
 from pkg_resources import EntryPoint, Requirement
 from pyspin.spin import make_spin, Spin1
@@ -157,49 +158,42 @@ class build_exe(distutils.core.Command):
 
     @make_spin(Spin1, 'Compiling project requirements...')
     def _compile_requirements(self):
-        packages = []
+        packages = set()
         for requirement in self.distribution.install_requires:
             requirement = Requirement.parse(requirement)
-            packages.append(requirement.key)
+            packages.add(requirement.key)
 
+        # Create the dependency map
         entries = json.loads(
             decode(subprocess.check_output(['pipdeptree', '--json'])))
-        updated = True
-        while updated:
-            updated = False
-            for entry in entries:
-                if entry['package']['key'] in packages:
-                    for dependency in entry['dependencies']:
-                        if dependency['key'] not in packages:
-                            packages.append(dependency['key'])
-                            updated = True
+        entry_map = { entry['package']['key'] : 
+                        set([ dependency['key'] for dependency in entry['dependencies'] ]) for entry in entries }
 
-        location_string = 'Location:'
-        files_string = 'Files:'
+        while True:
+            for package in packages:
+                if package in entry_map and not entry_map[package] < packages:
+                    packages.update(entry_map[package])
+                    break
+            else:
+                break
+
         module_files = set()
         binary_files = set()
 
         for package in packages:
             in_header = True
             root = None
-            with suppress(CalledProcessError):
-                for line in decode(
-                        subprocess.check_output(['pip', 'show', '-f', package
-                                                 ])).splitlines():
-                    line = line.strip()
-                    if in_header and line.startswith(location_string):
-                        root = line[len(location_string):]
-                    if in_header and line.startswith(files_string):
-                        assert root is not None
-                        in_header = False
-                        continue
-                    elif not in_header:
-                        full_path = os.path.abspath(
-                            os.path.join(root, line.strip()))
-                        if line.endswith('.py') or line.endswith('.pyc'):
-                            module_files.add(full_path)
-                        if is_binary(line):
-                            binary_files.add(full_path)
+            
+            for info in search_packages_info(package):
+                files = info['files']
+                root = info['location']
+                for file in files:
+                    full_path = os.path.abspath(
+                        os.path.join(root, file))
+                    if full_path.endswith('.py') or full_path.endswith('.pyc'):
+                        module_files.add(full_path)
+                    if is_binary(full_path):
+                        binary_files.add(full_path)
 
         return module_files, binary_files
 
