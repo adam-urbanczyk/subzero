@@ -15,6 +15,7 @@ setup(
         os.path.join(os.path.dirname(__file__), 'LICENSE')).readline().strip(),
     platforms='any',
     keywords=['pyinstaller'],
+    requires_python=">=3.3",
     install_requires=[
         'PyInstaller',
         'packaging',
